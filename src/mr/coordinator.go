@@ -13,28 +13,21 @@ type Coordinator struct {
 	Files       []string
 	Assignments map[string]int
 	NReduce     int
+	MapCount    int
+	ReduceCount int
 }
 
 // Your code here -- RPC handlers for the worker to call.
-
-// an example RPC handler.
-//
-// the RPC argument and reply types are defined in rpc.go.
-func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
-	reply.Y = args.X + 1
-	return nil
-
-}
 
 type GetTaskArgs struct {
 	WorkerID int
 }
 
 type GetTaskReply struct {
-	PluginName     string
-	InputFileName  string
-	OutputFileName string
-	Operation      string
+	PluginName      string
+	InputFileName   string
+	Operation       string
+	OperationNumber int
 }
 
 func (c *Coordinator) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
@@ -42,13 +35,15 @@ func (c *Coordinator) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
 	// get a file to process
 	for _, file := range c.Files {
 		if _, ok := c.Assignments[file]; !ok {
+			fmt.Printf("Found file %v\n", file)
 			c.Assignments[file] = args.WorkerID
 			reply.InputFileName = file
-			reply.OutputFileName = fmt.Sprintf("mr-%v-%d.txt", reply.InputFileName)
 			reply.Operation = "map"
+			c.MapCount++
+			reply.OperationNumber = c.MapCount
+			break
 		}
 	}
-
 	return nil
 }
 
@@ -71,8 +66,6 @@ func (c *Coordinator) server() {
 func (c *Coordinator) Done() bool {
 	ret := false
 
-	// Your code here.
-
 	return ret
 }
 
@@ -84,10 +77,13 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		Files:       files,
 		NReduce:     nReduce,
 		Assignments: make(map[string]int),
+		MapCount:    0,
+		ReduceCount: 0,
 	}
+	fmt.Printf("Coordinator: MakeCoordinator\n")
+	fmt.Printf("Coordinator: files %v\n", files)
 
 	// Your code here.
-
 	c.server()
 	return &c
 }

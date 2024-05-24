@@ -3,8 +3,11 @@ package mr
 import (
 	"fmt"
 	"hash/fnv"
+	"io/ioutil"
 	"log"
 	"net/rpc"
+	"os"
+	"sort"
 )
 
 // Map functions return a slice of KeyValue.
@@ -12,6 +15,14 @@ type KeyValue struct {
 	Key   string
 	Value string
 }
+
+// for sorting by key.
+type ByKey []KeyValue
+
+// for sorting by key.
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 // use ihash(key) % NReduce to choose the reduce
 // task number for each KeyValue emitted by Map.
@@ -33,7 +44,47 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 			break
 		}
 
-		fmt.Printf("GetTaskReply: %v\n", *getTaskReply)
+		if getTaskReply.Operation == "map" {
+			fmt.Printf("Map task received...\n")
+			fmt.Printf("filename: %v\n", getTaskReply.InputFileName)
+			fileName := getTaskReply.InputFileName
+			contents, err := ioutil.ReadFile(fileName)
+			if err != nil {
+				log.Fatalf("cannot read %v", fileName)
+				panic(err)
+			}
+
+			kva := mapf(fileName, string(contents))
+			// sort the key value pairs by key
+			sort.Sort(ByKey(kva))
+			for _, kv := range kva {
+				outputFileName := fmt.Sprintf("mr-%d-%d", getTaskReply.OperationNumber, ihash(kv.Key)%10) // todo: get nReduce from coordinator
+				// append the key value pair to the output file
+				file, err := os.OpenFile(outputFileName, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
+				if err != nil {
+					log.Fatalf("cannot open file %v", outputFileName)
+					panic(err)
+				}
+
+				_, err = fmt.Fprintf(file, "%s %s\n", kv.Key, kv.Value)
+				if err != nil {
+					log.Fatalf("cannot write to file %v", outputFileName)
+					file.Close()
+					panic(err)
+				}
+
+				err = file.Close()
+				if err != nil {
+					log.Fatalf("cannot close file %v", outputFileName)
+					panic(err)
+				}
+			}
+
+			fmt.Printf("Map task completed\n")
+		} else {
+			panic("reduce not implemented")
+		}
+
 	}
 }
 
