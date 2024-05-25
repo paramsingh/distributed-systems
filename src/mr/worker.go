@@ -3,11 +3,12 @@ package mr
 import (
 	"fmt"
 	"hash/fnv"
-	"io/ioutil"
+	"io"
 	"log"
 	"net/rpc"
 	"os"
 	"sort"
+	"strings"
 )
 
 // Map functions return a slice of KeyValue.
@@ -32,59 +33,155 @@ func ihash(key string) int {
 	return int(h.Sum32() & 0x7fffffff)
 }
 
-// main/mrworker.go calls this function.
+func handleMapTask(task *GetTaskReply, mapf func(string, string) []KeyValue) {
+	fmt.Printf("Map task received...\n")
+	fmt.Printf("filename: %v\n", task.InputFileName)
+	fileName := task.InputFileName
+	contents, err := os.ReadFile(fileName)
+	if err != nil {
+		log.Fatalf("cannot read %v", fileName)
+		panic(err)
+	}
+
+	kva := mapf(fileName, string(contents))
+	// sort the key value pairs by key
+	sort.Sort(ByKey(kva))
+	for _, kv := range kva {
+		outputFileName := fmt.Sprintf("mr-%d-%d", task.OperationNumber, ihash(kv.Key)%task.NReduce)
+		// append the key value pair to the output file
+		file, err := os.OpenFile(outputFileName, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
+		if err != nil {
+			log.Fatalf("cannot open file %v", outputFileName)
+			panic(err)
+		}
+
+		_, err = fmt.Fprintf(file, "%s %s\n", kv.Key, kv.Value)
+		if err != nil {
+			log.Fatalf("cannot write to file %v", outputFileName)
+			file.Close()
+			panic(err)
+		}
+
+		err = file.Close()
+		if err != nil {
+			log.Fatalf("cannot close file %v", outputFileName)
+			panic(err)
+		}
+	}
+
+	fmt.Printf("Map task completed\n")
+}
+
+func parseKeyValuePairsFromFile(filename string) []KeyValue {
+	file, err := os.Open(filename)
+	if err != nil {
+		log.Fatalf("cannot open file %v", filename)
+		panic(err)
+	}
+
+	defer file.Close()
+
+	content, err := io.ReadAll(file)
+	if err != nil {
+		log.Fatalf("cannot read file %v", filename)
+		panic(err)
+	}
+
+	// parse the key value pairs from the file
+	kva := []KeyValue{}
+	lines := strings.Split(string(content), "\n")
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		keyValue := strings.Split(string(line), " ")
+		kva = append(kva, KeyValue{keyValue[0], keyValue[1]})
+	}
+
+	return kva
+}
+
+func handleReduceTask(task *GetTaskReply, reducef func(string, []string) string) {
+	fmt.Printf("Reduce task received...\n")
+
+	intermediate := []KeyValue{}
+
+	for i := 0; i < task.NMap; i++ {
+		filename := fmt.Sprintf("mr-%d-%d", i, task.OperationNumber)
+		kva := parseKeyValuePairsFromFile(filename)
+		intermediate = append(intermediate, kva...)
+	}
+
+	sort.Sort(ByKey(intermediate))
+
+	for i := 0; i < len(intermediate); {
+		j := i + 1
+		for j < len(intermediate) && intermediate[j].Key == intermediate[i].Key {
+			j++
+		}
+
+		values := []string{}
+		for k := i; k < j; k++ {
+			values = append(values, intermediate[k].Value)
+		}
+
+		output := reducef(intermediate[i].Key, values)
+
+		outputFileName := fmt.Sprintf("mr-out-%d", task.OperationNumber)
+		file, err := os.OpenFile(outputFileName, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
+		if err != nil {
+			log.Fatalf("cannot open file %v", outputFileName)
+			panic(err)
+		}
+
+		_, err = fmt.Fprintf(file, "%s %s\n", intermediate[i].Key, output)
+		if err != nil {
+			log.Fatalf("cannot write to file %v", outputFileName)
+			file.Close()
+			panic(err)
+		}
+
+		err = file.Close()
+		if err != nil {
+			log.Fatalf("cannot close file %v", outputFileName)
+			panic(err)
+		}
+
+		i = j
+	}
+
+	fmt.Printf("Reduce task %v completed\n", task.OperationNumber)
+}
+
 func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string) string) {
-
-	// Your worker implementation here.
-
-	// uncomment to send the Example RPC to the coordinator.
-	for i := 0; i < 10; i++ {
-		getTaskReply, taskExists := GetTask()
+	for {
+		task, taskExists := GetTask()
 		if !taskExists {
 			break
 		}
 
-		if getTaskReply.Operation == "map" {
-			fmt.Printf("Map task received...\n")
-			fmt.Printf("filename: %v\n", getTaskReply.InputFileName)
-			fileName := getTaskReply.InputFileName
-			contents, err := ioutil.ReadFile(fileName)
-			if err != nil {
-				log.Fatalf("cannot read %v", fileName)
-				panic(err)
-			}
-
-			kva := mapf(fileName, string(contents))
-			// sort the key value pairs by key
-			sort.Sort(ByKey(kva))
-			for _, kv := range kva {
-				outputFileName := fmt.Sprintf("mr-%d-%d", getTaskReply.OperationNumber, ihash(kv.Key)%10) // todo: get nReduce from coordinator
-				// append the key value pair to the output file
-				file, err := os.OpenFile(outputFileName, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
-				if err != nil {
-					log.Fatalf("cannot open file %v", outputFileName)
-					panic(err)
-				}
-
-				_, err = fmt.Fprintf(file, "%s %s\n", kv.Key, kv.Value)
-				if err != nil {
-					log.Fatalf("cannot write to file %v", outputFileName)
-					file.Close()
-					panic(err)
-				}
-
-				err = file.Close()
-				if err != nil {
-					log.Fatalf("cannot close file %v", outputFileName)
-					panic(err)
-				}
-			}
-
-			fmt.Printf("Map task completed\n")
+		if task.Operation == "map" {
+			handleMapTask(task, mapf)
+		} else if task.Operation == "reduce" {
+			handleReduceTask(task, reducef)
 		} else {
-			panic("reduce not implemented")
+			log.Fatalf("unknown operation: %v", task.Operation)
+			panic(fmt.Errorf("unknown operation: %v", task.Operation))
 		}
 
+		MarkTaskCompleted(task.Operation, task.OperationNumber)
+	}
+}
+
+func MarkTaskCompleted(operation string, operationNumber int) {
+	args := MarkTaskCompletedArgs{
+		Operation:       operation,
+		OperationNumber: operationNumber,
+	}
+	reply := MarkTaskCompletedReply{}
+	ok := call("Coordinator.MarkTaskCompleted", &args, &reply)
+	if !ok {
+		fmt.Printf("call failed!\n")
 	}
 }
 
@@ -95,7 +192,6 @@ func GetTask() (*GetTaskReply, bool) {
 	reply := GetTaskReply{}
 	ok := call("Coordinator.GetTask", &args, &reply)
 	if ok {
-		fmt.Printf("GetTaskReply: %v\n", reply)
 		return &reply, true
 	} else {
 		fmt.Printf("call failed!\n")
