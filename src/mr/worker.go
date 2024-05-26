@@ -9,6 +9,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Map functions return a slice of KeyValue.
@@ -46,19 +47,25 @@ func handleMapTask(task *GetTaskReply, mapf func(string, string) []KeyValue) {
 	kva := mapf(fileName, string(contents))
 	// sort the key value pairs by key
 	sort.Sort(ByKey(kva))
+
+	filecontentsmap := make(map[string]string)
 	for _, kv := range kva {
 		outputFileName := fmt.Sprintf("mr-%d-%d", task.OperationNumber, ihash(kv.Key)%task.NReduce)
-		// append the key value pair to the output file
-		file, err := os.OpenFile(outputFileName, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
+		output := filecontentsmap[outputFileName]
+		filecontentsmap[outputFileName] = fmt.Sprintf("%s%s %s\n", output, kv.Key, kv.Value)
+	}
+
+	for outputFileName, output := range filecontentsmap {
+		file, err := os.OpenFile(outputFileName, os.O_WRONLY|os.O_CREATE, 0644)
+
 		if err != nil {
 			log.Fatalf("cannot open file %v", outputFileName)
 			panic(err)
 		}
 
-		_, err = fmt.Fprintf(file, "%s %s\n", kv.Key, kv.Value)
+		_, err = fmt.Fprintf(file, "%s", output)
 		if err != nil {
 			log.Fatalf("cannot write to file %v", outputFileName)
-			file.Close()
 			panic(err)
 		}
 
@@ -69,7 +76,7 @@ func handleMapTask(task *GetTaskReply, mapf func(string, string) []KeyValue) {
 		}
 	}
 
-	fmt.Printf("Map task completed\n")
+	fmt.Printf("Map task completed: %v\n", task.InputFileName)
 }
 
 func parseKeyValuePairsFromFile(filename string) []KeyValue {
@@ -89,12 +96,12 @@ func parseKeyValuePairsFromFile(filename string) []KeyValue {
 
 	// parse the key value pairs from the file
 	kva := []KeyValue{}
-	lines := strings.Split(string(content), "\n")
+	lines := strings.Split(strings.TrimSpace(string(content)), "\n")
 	for _, line := range lines {
 		if line == "" {
 			continue
 		}
-		keyValue := strings.Split(string(line), " ")
+		keyValue := strings.Fields(line)
 		kva = append(kva, KeyValue{keyValue[0], keyValue[1]})
 	}
 
@@ -102,7 +109,7 @@ func parseKeyValuePairsFromFile(filename string) []KeyValue {
 }
 
 func handleReduceTask(task *GetTaskReply, reducef func(string, []string) string) {
-	fmt.Printf("Reduce task received...\n")
+	fmt.Printf("Reduce task %v received...\n", task.OperationNumber)
 
 	intermediate := []KeyValue{}
 
@@ -159,7 +166,11 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 		if !taskExists {
 			break
 		}
-
+		if task.WaitForTask {
+			// sleep  before trying to get a new task
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
 		if task.Operation == "map" {
 			handleMapTask(task, mapf)
 		} else if task.Operation == "reduce" {

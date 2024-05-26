@@ -36,6 +36,7 @@ type GetTaskReply struct {
 	OperationNumber int
 	NMap            int
 	NReduce         int
+	WaitForTask     bool
 }
 
 func (c *Coordinator) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
@@ -51,16 +52,27 @@ func (c *Coordinator) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
 			reply.OperationNumber = i
 			reply.NMap = c.NMap
 			reply.NReduce = c.NReduce
+			reply.WaitForTask = false
 			c.MapTasks[i].workerID = args.WorkerID
 			c.MapTasks[i].assigned = true
-			fmt.Printf("tasks %v\n", c.MapTasks)
+			fmt.Printf("coordinator: map tasks %v\n", c.MapTasks)
+			fmt.Printf("coordinator: reduce tasks %v\n", c.ReduceTasks)
 			break
 		}
 	}
 
 	if found {
+		fmt.Printf("coordinator: found map task: returning\n")
 		return nil
 	}
+
+	if !c.AllMapTasksCompleted() {
+		reply.WaitForTask = true
+		fmt.Print("no tasks available, wait\n")
+		return nil
+	}
+
+	fmt.Printf("coordinator: no map tasks available, looking for reduce tasks\n")
 
 	// get a reduce task
 	for i, task := range c.ReduceTasks {
@@ -72,7 +84,9 @@ func (c *Coordinator) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
 			reply.NMap = c.NMap
 			c.ReduceTasks[i].workerID = args.WorkerID
 			c.ReduceTasks[i].assigned = true
-			fmt.Printf("tasks %v", c.MapTasks)
+			reply.WaitForTask = false
+			fmt.Printf("coordinator: map tasks %v\n", c.MapTasks)
+			fmt.Printf("coordinator: reduce tasks %v\n", c.ReduceTasks)
 			break
 		}
 	}
@@ -80,6 +94,7 @@ func (c *Coordinator) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
 	if !found {
 		return fmt.Errorf("no tasks available")
 	}
+	fmt.Printf("coordinator: found reduce task: returning\n")
 	return nil
 }
 
@@ -154,6 +169,8 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	}
 	fmt.Printf("Coordinator: MakeCoordinator\n")
 	fmt.Printf("Coordinator: files %v\n", files)
+	fmt.Printf("Coordinator: map tasks %v\n", c.MapTasks)
+	fmt.Printf("Coordinator: reduce tasks %v\n", c.ReduceTasks)
 
 	c.server()
 	return &c
