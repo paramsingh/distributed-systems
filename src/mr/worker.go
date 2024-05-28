@@ -80,6 +80,13 @@ func handleMapTask(task *GetTaskReply, mapf func(string, string) []KeyValue) {
 }
 
 func parseKeyValuePairsFromFile(filename string) []KeyValue {
+	// check if the file exists
+	_, err := os.Stat(filename)
+	if os.IsNotExist(err) {
+		log.Printf("file %v does not exist\n", filename)
+		return []KeyValue{}
+	}
+
 	file, err := os.Open(filename)
 	if err != nil {
 		log.Fatalf("cannot open file %v", filename)
@@ -116,8 +123,11 @@ func handleReduceTask(task *GetTaskReply, reducef func(string, []string) string)
 	for i := 0; i < task.NMap; i++ {
 		filename := fmt.Sprintf("mr-%d-%d", i, task.OperationNumber)
 		kva := parseKeyValuePairsFromFile(filename)
+		fmt.Printf("reduce task %v: got intermediate keys from %v\n", task.OperationNumber, filename)
 		intermediate = append(intermediate, kva...)
 	}
+
+	fmt.Printf("reduce task %v: got intermediate keys\n", task.OperationNumber)
 
 	sort.Sort(ByKey(intermediate))
 
@@ -207,33 +217,6 @@ func GetTask() (*GetTaskReply, bool) {
 	} else {
 		fmt.Printf("call failed!\n")
 		return nil, false
-	}
-}
-
-// example function to show how to make an RPC call to the coordinator.
-//
-// the RPC argument and reply types are defined in rpc.go.
-func CallExample() {
-
-	// declare an argument structure.
-	args := ExampleArgs{}
-
-	// fill in the argument(s).
-	args.X = 99
-
-	// declare a reply structure.
-	reply := ExampleReply{}
-
-	// send the RPC request, wait for the reply.
-	// the "Coordinator.Example" tells the
-	// receiving server that we'd like to call
-	// the Example() method of struct Coordinator.
-	ok := call("Coordinator.Example", &args, &reply)
-	if ok {
-		// reply.Y should be 100.
-		fmt.Printf("reply.Y %v\n", reply.Y)
-	} else {
-		fmt.Printf("call failed!\n")
 	}
 }
 
