@@ -8,12 +8,14 @@ import (
 	"net/rpc"
 	"os"
 	"sync"
+	"time"
 )
 
 type Task struct {
-	workerID  int
-	completed bool
-	assigned  bool
+	workerID   int
+	completed  bool
+	assigned   bool
+	assignedAt time.Time
 }
 
 type Coordinator struct {
@@ -24,6 +26,7 @@ type Coordinator struct {
 	MapTasks    []Task
 	ReduceTasks []Task
 	Phase       string
+	done        chan struct{}
 }
 
 type GetTaskArgs struct {
@@ -55,6 +58,7 @@ func (c *Coordinator) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
 			reply.WaitForTask = false
 			c.MapTasks[i].workerID = args.WorkerID
 			c.MapTasks[i].assigned = true
+			c.MapTasks[i].assignedAt = time.Now()
 			fmt.Printf("coordinator: map tasks %v\n", c.MapTasks)
 			fmt.Printf("coordinator: reduce tasks %v\n", c.ReduceTasks)
 			break
@@ -77,24 +81,25 @@ func (c *Coordinator) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
 	// get a reduce task
 	for i, task := range c.ReduceTasks {
 		if !task.completed && !task.assigned {
-			found = true
 			reply.Operation = "reduce"
 			reply.OperationNumber = i
 			reply.NReduce = c.NReduce
 			reply.NMap = c.NMap
 			c.ReduceTasks[i].workerID = args.WorkerID
 			c.ReduceTasks[i].assigned = true
+			c.ReduceTasks[i].assignedAt = time.Now()
 			reply.WaitForTask = false
 			fmt.Printf("coordinator: map tasks %v\n", c.MapTasks)
 			fmt.Printf("coordinator: reduce tasks %v\n", c.ReduceTasks)
-			break
+			return nil
 		}
 	}
 
-	if !found {
-		return fmt.Errorf("no tasks available")
+	if c.AllReduceTasksCompleted() {
+		return fmt.Errorf("all tasks completed")
 	}
-	fmt.Printf("coordinator: found reduce task: returning\n")
+	fmt.Printf("coordinator: no reduce tasks available, wait\n")
+	reply.WaitForTask = true
 	return nil
 }
 
@@ -153,7 +158,49 @@ func (c *Coordinator) server() {
 // main/mrcoordinator.go calls Done() periodically to find out
 // if the entire job has finished.
 func (c *Coordinator) Done() bool {
-	return c.AllMapTasksCompleted() && c.AllReduceTasksCompleted()
+	if c.AllMapTasksCompleted() && c.AllReduceTasksCompleted() {
+		close(c.done)
+		return true
+	}
+
+	return false
+}
+
+func (c *Coordinator) startPeriodicChecks() {
+
+	ticker := time.NewTicker(10 * time.Second)
+
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				c.checkTimeoutsAndReassignTasks()
+			case <-c.done:
+				ticker.Stop()
+				return
+			}
+		}
+	}()
+}
+
+func (c *Coordinator) checkTimeoutsAndReassignTasks() {
+	fmt.Printf("coordinator: checking for timed out tasks\n")
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for i, task := range c.MapTasks {
+		if task.assigned && !task.completed && time.Since(task.assignedAt) > 10*time.Second {
+			fmt.Printf("coordinator: map task %v timed out, reassigning\n", i)
+			c.MapTasks[i] = Task{}
+		}
+	}
+
+	for i, task := range c.ReduceTasks {
+		if task.assigned && !task.completed && time.Since(task.assignedAt) > 10*time.Second {
+			fmt.Printf("coordinator: reduce task %v timed out, reassigning\n", i)
+			c.ReduceTasks[i] = Task{}
+		}
+	}
 }
 
 // create a Coordinator.
@@ -166,12 +213,14 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		NMap:        len(files),
 		MapTasks:    make([]Task, len(files)),
 		ReduceTasks: make([]Task, nReduce),
+		done:        make(chan struct{}),
 	}
 	fmt.Printf("Coordinator: MakeCoordinator\n")
 	fmt.Printf("Coordinator: files %v\n", files)
 	fmt.Printf("Coordinator: map tasks %v\n", c.MapTasks)
 	fmt.Printf("Coordinator: reduce tasks %v\n", c.ReduceTasks)
 
+	c.startPeriodicChecks()
 	c.server()
 	return &c
 }
