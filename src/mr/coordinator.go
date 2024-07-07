@@ -11,10 +11,17 @@ import (
 	"time"
 )
 
+type TaskStatus int
+
+const (
+	NotStarted TaskStatus = iota
+	Assigned
+	Completed
+)
+
 type Task struct {
 	workerID   int
-	completed  bool
-	assigned   bool
+	taskStatus TaskStatus
 	assignedAt time.Time
 }
 
@@ -48,7 +55,7 @@ func (c *Coordinator) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
 
 	found := false
 	for i, task := range c.MapTasks {
-		if !task.completed && !task.assigned {
+		if task.taskStatus == NotStarted {
 			found = true
 			reply.InputFileName = c.Files[i]
 			reply.Operation = "map"
@@ -57,7 +64,7 @@ func (c *Coordinator) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
 			reply.NReduce = c.NReduce
 			reply.WaitForTask = false
 			c.MapTasks[i].workerID = args.WorkerID
-			c.MapTasks[i].assigned = true
+			c.MapTasks[i].taskStatus = Assigned
 			c.MapTasks[i].assignedAt = time.Now()
 			fmt.Printf("coordinator: map tasks %v\n", c.MapTasks)
 			fmt.Printf("coordinator: reduce tasks %v\n", c.ReduceTasks)
@@ -80,13 +87,13 @@ func (c *Coordinator) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
 
 	// get a reduce task
 	for i, task := range c.ReduceTasks {
-		if !task.completed && !task.assigned {
+		if task.taskStatus == NotStarted {
 			reply.Operation = "reduce"
 			reply.OperationNumber = i
 			reply.NReduce = c.NReduce
 			reply.NMap = c.NMap
 			c.ReduceTasks[i].workerID = args.WorkerID
-			c.ReduceTasks[i].assigned = true
+			c.ReduceTasks[i].taskStatus = Assigned
 			c.ReduceTasks[i].assignedAt = time.Now()
 			reply.WaitForTask = false
 			fmt.Printf("coordinator: map tasks %v\n", c.MapTasks)
@@ -114,10 +121,10 @@ func (c *Coordinator) MarkTaskCompleted(args *MarkTaskCompletedArgs, reply *Mark
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if args.Operation == "map" {
-		c.MapTasks[args.OperationNumber].completed = true
+		c.MapTasks[args.OperationNumber].taskStatus = Completed
 		return nil
 	} else if args.Operation == "reduce" {
-		c.ReduceTasks[args.OperationNumber].completed = true
+		c.ReduceTasks[args.OperationNumber].taskStatus = Completed
 		return nil
 	}
 	return fmt.Errorf("invalid operation")
@@ -125,7 +132,7 @@ func (c *Coordinator) MarkTaskCompleted(args *MarkTaskCompletedArgs, reply *Mark
 
 func (c *Coordinator) AllMapTasksCompleted() bool {
 	for _, task := range c.MapTasks {
-		if !task.completed {
+		if task.taskStatus != Completed {
 			return false
 		}
 	}
@@ -134,7 +141,7 @@ func (c *Coordinator) AllMapTasksCompleted() bool {
 
 func (c *Coordinator) AllReduceTasksCompleted() bool {
 	for _, task := range c.ReduceTasks {
-		if !task.completed {
+		if task.taskStatus != Completed {
 			return false
 		}
 	}
@@ -189,14 +196,14 @@ func (c *Coordinator) checkTimeoutsAndReassignTasks() {
 	defer c.mu.Unlock()
 
 	for i, task := range c.MapTasks {
-		if task.assigned && !task.completed && time.Since(task.assignedAt) > 10*time.Second {
+		if task.taskStatus == Assigned && time.Since(task.assignedAt) > 10*time.Second {
 			fmt.Printf("coordinator: map task %v timed out, reassigning\n", i)
 			c.MapTasks[i] = Task{}
 		}
 	}
 
 	for i, task := range c.ReduceTasks {
-		if task.assigned && !task.completed && time.Since(task.assignedAt) > 10*time.Second {
+		if task.taskStatus == Assigned && time.Since(task.assignedAt) > 10*time.Second {
 			fmt.Printf("coordinator: reduce task %v timed out, reassigning\n", i)
 			c.ReduceTasks[i] = Task{}
 		}
