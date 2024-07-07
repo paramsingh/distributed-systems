@@ -32,9 +32,7 @@ type Coordinator struct {
 	done        chan struct{}
 }
 
-type GetTaskArgs struct {
-	WorkerID int
-}
+type GetTaskArgs struct{}
 
 type GetTaskReply struct {
 	InputFileName   string
@@ -45,59 +43,69 @@ type GetTaskReply struct {
 	WaitForTask     bool
 }
 
+var ErrAllTasksCompleted = fmt.Errorf("all tasks completed")
+
 func (c *Coordinator) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	found := false
-	for i, task := range c.MapTasks {
-		if task.taskStatus == NotStarted {
-			found = true
-			reply.InputFileName = c.Files[i]
-			reply.Operation = "map"
-			reply.OperationNumber = i
-			reply.NMap = len(c.MapTasks)
-			reply.NReduce = len(c.ReduceTasks)
-			reply.WaitForTask = false
-			c.MapTasks[i].taskStatus = Assigned
-			c.MapTasks[i].assignedAt = time.Now()
-			break
-		}
-	}
-
-	if found {
-		fmt.Printf("coordinator: found map task: returning\n")
+	if i, task := c.findAvailableTask(c.MapTasks); task != nil {
+		c.assignTask("map", i, task, reply)
 		return nil
 	}
 
-	if !c.AllMapTasksCompleted() {
+	if !c.allTasksCompleted(c.MapTasks) {
 		reply.WaitForTask = true
-		fmt.Print("no tasks available, wait\n")
+		fmt.Println("No map tasks available, worker should wait")
 		return nil
 	}
 
-	fmt.Printf("coordinator: no map tasks available, looking for reduce tasks\n")
+	fmt.Println("All map tasks completed, looking for reduce tasks")
 
-	// get a reduce task
-	for i, task := range c.ReduceTasks {
+	if i, task := c.findAvailableTask(c.ReduceTasks); task != nil {
+		c.assignTask("reduce", i, task, reply)
+		return nil
+	}
+
+	if c.allTasksCompleted(c.ReduceTasks) {
+		return ErrAllTasksCompleted
+	}
+
+	reply.WaitForTask = true
+	fmt.Println("No reduce tasks available, worker should wait")
+	return nil
+}
+
+func (c *Coordinator) findAvailableTask(tasks []Task) (int, *Task) {
+	for i, task := range tasks {
 		if task.taskStatus == NotStarted {
-			reply.Operation = "reduce"
-			reply.OperationNumber = i
-			reply.NReduce = len(c.ReduceTasks)
-			reply.NMap = len(c.MapTasks)
-			c.ReduceTasks[i].taskStatus = Assigned
-			c.ReduceTasks[i].assignedAt = time.Now()
-			reply.WaitForTask = false
-			return nil
+			return i, &tasks[i]
 		}
 	}
+	return 0, nil
+}
 
-	if c.AllReduceTasksCompleted() {
-		return fmt.Errorf("all tasks completed")
+func (c *Coordinator) assignTask(operation string, index int, task *Task, reply *GetTaskReply) {
+	reply.Operation = operation
+	reply.OperationNumber = index
+	reply.NMap = len(c.MapTasks)
+	reply.NReduce = len(c.ReduceTasks)
+	reply.WaitForTask = false
+	task.taskStatus = Assigned
+	task.assignedAt = time.Now()
+
+	if operation == "map" {
+		reply.InputFileName = c.Files[index]
 	}
-	fmt.Printf("coordinator: no reduce tasks available, wait\n")
-	reply.WaitForTask = true
-	return nil
+}
+
+func (c *Coordinator) allTasksCompleted(tasks []Task) bool {
+	for _, task := range tasks {
+		if task.taskStatus != Completed {
+			return false
+		}
+	}
+	return true
 }
 
 type MarkTaskCompletedArgs struct {

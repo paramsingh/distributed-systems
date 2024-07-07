@@ -45,8 +45,6 @@ func handleMapTask(task *GetTaskReply, mapf func(string, string) []KeyValue) {
 	}
 
 	kva := mapf(fileName, string(contents))
-	// sort the key value pairs by key
-	sort.Sort(ByKey(kva))
 
 	filecontentsmap := make(map[string]string)
 	for _, kv := range kva {
@@ -207,9 +205,7 @@ func MarkTaskCompleted(operation string, operationNumber int) {
 }
 
 func GetTask() (*GetTaskReply, bool) {
-	args := GetTaskArgs{
-		WorkerID: 1, // TODO(param): worker id
-	}
+	args := GetTaskArgs{}
 	reply := GetTaskReply{}
 	ok := call("Coordinator.GetTask", &args, &reply)
 	if ok {
