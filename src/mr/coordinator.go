@@ -20,7 +20,6 @@ const (
 )
 
 type Task struct {
-	workerID   int
 	taskStatus TaskStatus
 	assignedAt time.Time
 }
@@ -28,11 +27,8 @@ type Task struct {
 type Coordinator struct {
 	mu          sync.Mutex
 	Files       []string
-	NReduce     int
-	NMap        int
 	MapTasks    []Task
 	ReduceTasks []Task
-	Phase       string
 	done        chan struct{}
 }
 
@@ -60,14 +56,11 @@ func (c *Coordinator) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
 			reply.InputFileName = c.Files[i]
 			reply.Operation = "map"
 			reply.OperationNumber = i
-			reply.NMap = c.NMap
-			reply.NReduce = c.NReduce
+			reply.NMap = len(c.MapTasks)
+			reply.NReduce = len(c.ReduceTasks)
 			reply.WaitForTask = false
-			c.MapTasks[i].workerID = args.WorkerID
 			c.MapTasks[i].taskStatus = Assigned
 			c.MapTasks[i].assignedAt = time.Now()
-			fmt.Printf("coordinator: map tasks %v\n", c.MapTasks)
-			fmt.Printf("coordinator: reduce tasks %v\n", c.ReduceTasks)
 			break
 		}
 	}
@@ -90,14 +83,11 @@ func (c *Coordinator) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
 		if task.taskStatus == NotStarted {
 			reply.Operation = "reduce"
 			reply.OperationNumber = i
-			reply.NReduce = c.NReduce
-			reply.NMap = c.NMap
-			c.ReduceTasks[i].workerID = args.WorkerID
+			reply.NReduce = len(c.ReduceTasks)
+			reply.NMap = len(c.MapTasks)
 			c.ReduceTasks[i].taskStatus = Assigned
 			c.ReduceTasks[i].assignedAt = time.Now()
 			reply.WaitForTask = false
-			fmt.Printf("coordinator: map tasks %v\n", c.MapTasks)
-			fmt.Printf("coordinator: reduce tasks %v\n", c.ReduceTasks)
 			return nil
 		}
 	}
@@ -216,8 +206,6 @@ func (c *Coordinator) checkTimeoutsAndReassignTasks() {
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{
 		Files:       files,
-		NReduce:     nReduce,
-		NMap:        len(files),
 		MapTasks:    make([]Task, len(files)),
 		ReduceTasks: make([]Task, nReduce),
 		done:        make(chan struct{}),
