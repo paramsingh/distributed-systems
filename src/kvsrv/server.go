@@ -17,8 +17,8 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 type KVServer struct {
 	mu            sync.Mutex
 	Entries       map[string]string
-	lastRequestId map[int64]int64
-	appendReplies map[int64]string
+	lastRequestId map[int64]int64  // key: clientId, value: lastRequestId
+	appendReplies map[int64]string // key: clientId, value: last reply for Append
 }
 
 func (kv *KVServer) requestAlreadyDone(clientId int64, requestId int64) bool {
